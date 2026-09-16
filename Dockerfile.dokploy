@@ -3,29 +3,18 @@
 # ========================================================
 FROM php:8.4-cli-bookworm AS builder
 
-# Install build prerequisites: git, curl, unzip, make, python3, and libraries for PHP extensions
-RUN apt-get update && apt-get install -y \
-    git \
-    curl \
-    unzip \
-    make \
-    python3 \
-    libpng-dev \
-    libzip-dev \
-    libxml2-dev \
-    libfreetype6-dev \
-    libjpeg-dev \
-    gettext \
-    locales \
-    && rm -rf /var/lib/apt/lists/*
+# Install official PHP extension installer helper (fast pre-built binaries)
+COPY --from=mlocati/php-extension-installer /usr/bin/install-php-extensions /usr/local/bin/
 
 # Install required PHP extensions for builder validation & composer
-RUN docker-php-ext-install -j$(nproc) xml exif pdo_mysql gettext iconv mysqli zip bcmath && \
-    docker-php-ext-configure gd --with-freetype --with-jpeg && \
-    docker-php-ext-install -j$(nproc) gd
+RUN install-php-extensions xml exif pdo_mysql gettext iconv mysqli zip bcmath gd
 
-# Install Composer
-RUN curl -fsSL https://getcomposer.org/installer | php -- --install-dir=/usr/local/bin --filename=composer
+# Install system dependencies (git, unzip for composer)
+RUN apt-get update && apt-get install -y git unzip curl make python3 && rm -rf /var/lib/apt/lists/*
+
+# Install official Composer
+COPY --from=composer:2 /usr/bin/composer /usr/local/bin/composer
+ENV COMPOSER_MEMORY_LIMIT=-1
 
 # Install Node.js 24 (aligned with package.json engines >=24.0.0)
 RUN curl -fsSL https://deb.nodesource.com/setup_24.x | bash - && \
@@ -52,21 +41,15 @@ FROM php:8.4-apache-bookworm AS production
 LABEL maintainer="ChurchCRM"
 EXPOSE 80
 
-# Install runtime dependencies and PHP extensions
-RUN apt-get update && apt-get install -y \
-    gettext \
-    locales \
-    locales-all \
-    libpng-dev \
-    libzip-dev \
-    libfreetype6-dev \
-    libjpeg-dev \
-    libxml2-dev \
-    && docker-php-ext-install -j$(nproc) xml exif pdo_mysql gettext iconv mysqli zip && \
-    docker-php-ext-configure gd --with-freetype --with-jpeg && \
-    docker-php-ext-install -j$(nproc) gd && \
-    a2enmod rewrite && \
-    rm -rf /var/lib/apt/lists/*
+# Install extension installer helper
+COPY --from=mlocati/php-extension-installer /usr/bin/install-php-extensions /usr/local/bin/
+
+# Install runtime extensions and enable Apache mod_rewrite
+RUN install-php-extensions xml exif pdo_mysql gettext iconv mysqli zip gd && \
+    a2enmod rewrite
+
+# Install locales for multilingual support
+RUN apt-get update && apt-get install -y locales locales-all gettext && rm -rf /var/lib/apt/lists/*
 
 # Apache & PHP configuration
 COPY docker/apache/default.conf /etc/apache2/apache2.conf
