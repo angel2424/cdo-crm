@@ -1,0 +1,55 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile.dokploy
+    restart: unless-stopped
+    depends_on:
+      database:
+        condition: service_healthy
+    environment:
+      DB_SERVER_NAME: database
+      DB_SERVER_PORT: 3306
+      DB_USER: churchcrm
+      DB_PASSWORD: ${MYSQL_PASSWORD:-changeme}
+      DB_NAME: churchcrm
+      ROOT_PATH: ""
+      CRM_URL: ${CRM_URL:-http://localhost/}
+    volumes:
+      # Preserve uploaded member and family photos across container updates
+      - churchcrm-images:/var/www/html/Images
+    ports:
+      - "${APP_PORT:-8080}:80"
+    networks:
+      - default
+      - dokploy-network
+
+  database:
+    image: mariadb:11
+    restart: unless-stopped
+    command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-changeme_root}
+      MYSQL_DATABASE: churchcrm
+      MYSQL_USER: churchcrm
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-changeme}
+    volumes:
+      # Persistent database storage
+      - churchcrm-db:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - default
+
+volumes:
+  churchcrm-db:
+  churchcrm-images:
+
+networks:
+  default:
+    driver: bridge
+  dokploy-network:
+    external: true

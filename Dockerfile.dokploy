@@ -1,0 +1,92 @@
+# ========================================================
+# Stage 1: Build Frontend Assets & PHP Dependencies
+# ========================================================
+FROM php:8.4-cli-bookworm AS builder
+
+# Install build prerequisites: git, curl, unzip, make, python3, and libraries for PHP extensions
+RUN apt-get update && apt-get install -y \
+    git \
+    curl \
+    unzip \
+    make \
+    python3 \
+    libpng-dev \
+    libzip-dev \
+    libxml2-dev \
+    libfreetype6-dev \
+    libjpeg-dev \
+    gettext \
+    locales \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install required PHP extensions for builder validation & composer
+RUN docker-php-ext-install -j$(nproc) xml exif pdo_mysql gettext iconv mysqli zip bcmath && \
+    docker-php-ext-configure gd --with-freetype --with-jpeg && \
+    docker-php-ext-install -j$(nproc) gd
+
+# Install Composer
+RUN curl -fsSL https://getcomposer.org/installer | php -- --install-dir=/usr/local/bin --filename=composer
+
+# Install Node.js 24 (aligned with package.json engines >=24.0.0)
+RUN curl -fsSL https://deb.nodesource.com/setup_24.x | bash - && \
+    apt-get install -y nodejs && \
+    rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Cache package dependencies
+COPY package*.json ./
+RUN npm ci
+
+# Copy repository source files
+COPY . .
+
+# Build frontend bundles (webpack, grunt) and PHP composer dependencies
+RUN npm run build
+
+# ========================================================
+# Stage 2: Production Apache Runtime
+# ========================================================
+FROM php:8.4-apache-bookworm AS production
+
+LABEL maintainer="ChurchCRM"
+EXPOSE 80
+
+# Install runtime dependencies and PHP extensions
+RUN apt-get update && apt-get install -y \
+    gettext \
+    locales \
+    locales-all \
+    libpng-dev \
+    libzip-dev \
+    libfreetype6-dev \
+    libjpeg-dev \
+    libxml2-dev \
+    && docker-php-ext-install -j$(nproc) xml exif pdo_mysql gettext iconv mysqli zip && \
+    docker-php-ext-configure gd --with-freetype --with-jpeg && \
+    docker-php-ext-install -j$(nproc) gd && \
+    a2enmod rewrite && \
+    rm -rf /var/lib/apt/lists/*
+
+# Apache & PHP configuration
+COPY docker/apache/default.conf /etc/apache2/apache2.conf
+RUN mv "$PHP_INI_DIR/php.ini-production" "$PHP_INI_DIR/php.ini" && \
+    sed -i 's/^upload_max_filesize.*$/upload_max_filesize = 25M/g' $PHP_INI_DIR/php.ini && \
+    sed -i 's/^post_max_size.*$/post_max_size = 30M/g' $PHP_INI_DIR/php.ini && \
+    sed -i 's/^memory_limit.*$/memory_limit = 512M/g' $PHP_INI_DIR/php.ini && \
+    sed -i 's/^max_execution_time.*$/max_execution_time = 120/g' $PHP_INI_DIR/php.ini
+
+WORKDIR /var/www/html
+
+# Copy built application from builder stage
+COPY --from=builder /app/src /var/www/html
+
+# Copy entrypoint script
+COPY docker/dokploy-entrypoint.sh /usr/local/bin/dokploy-entrypoint.sh
+RUN chmod +x /usr/local/bin/dokploy-entrypoint.sh
+
+# Set ownership for Apache
+RUN chown -R www-data:www-data /var/www/html
+
+ENTRYPOINT ["/usr/local/bin/dokploy-entrypoint.sh"]
+CMD ["apache2-foreground"]
