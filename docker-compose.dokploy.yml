@@ -18,8 +18,8 @@ services:
     volumes:
       # Preserve uploaded member and family photos across container updates
       - churchcrm-images:/var/www/html/Images
-    ports:
-      - "${APP_PORT:-8080}:80"
+    expose:
+      - 80
     networks:
       - default
       - dokploy-network
